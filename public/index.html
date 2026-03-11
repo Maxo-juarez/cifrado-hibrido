@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Cifrado Híbrido</title>
+</head>
+<body>
+
+<h2>Enviar mensaje seguro</h2>
+<textarea id="message" rows="5" cols="40"></textarea>
+<br><br>
+<button id="sendBtn">Enviar Seguro</button>
+
+<script>
+document.getElementById("sendBtn").addEventListener("click", async () => {
+
+  const message = document.getElementById("message").value;
+  const encoder = new TextEncoder();
+
+  // 1️ Obtener llave pública
+  const response = await fetch("http://localhost:3000/api/public-key");
+  const data = await response.json();
+  const publicKeyPem = data.publicKey;
+
+  console.log("LLAVE RECIBIDA:");
+  console.log(publicKeyPem);
+
+  //  Limpiar correctamente el PEM
+  const pemContents = publicKeyPem
+    .replace(/-----BEGIN PUBLIC KEY-----/, "")
+    .replace(/-----END PUBLIC KEY-----/, "")
+    .replace(/\s+/g, "");
+
+  const binaryDer = Uint8Array.from(
+    atob(pemContents),
+    c => c.charCodeAt(0)
+  );
+
+  const publicKey = await window.crypto.subtle.importKey(
+    "spki",
+    binaryDer.buffer,
+    {
+      name: "RSA-OAEP",
+      hash: "SHA-256"
+    },
+    false,
+    ["encrypt"]
+  );
+
+  // 2️ Generar clave AES
+  const aesKey = await window.crypto.subtle.generateKey(
+    {
+      name: "AES-CBC",
+      length: 256
+    },
+    true,
+    ["encrypt"]
+  );
+
+  const iv = window.crypto.getRandomValues(new Uint8Array(16));
+
+  // 3️ Cifrar mensaje
+  const encryptedMessage = await window.crypto.subtle.encrypt(
+    {
+      name: "AES-CBC",
+      iv: iv
+    },
+    aesKey,
+    encoder.encode(message)
+  );
+
+  // 4️ Exportar clave AES
+  const rawAesKey = await window.crypto.subtle.exportKey("raw", aesKey);
+
+  // 5️ Cifrar clave AES con RSA
+  const encryptedKey = await window.crypto.subtle.encrypt(
+    {
+      name: "RSA-OAEP"
+    },
+    publicKey,
+    rawAesKey
+  );
+
+  // 6️ Enviar al servidor
+  const secureResponse = await fetch("http://localhost:3000/api/secure-message", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      encryptedMessage: arrayBufferToBase64(encryptedMessage),
+      encryptedKey: arrayBufferToBase64(encryptedKey),
+      iv: arrayBufferToBase64(iv)
+    })
+  });
+
+  const result = await secureResponse.json();
+
+  alert("Mensaje descifrado en servidor: " + result.decryptedMessage);
+});
+
+function arrayBufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+</script>
+
+</body>
+</html>
